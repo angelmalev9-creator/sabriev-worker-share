@@ -1,0 +1,79 @@
+// Cloudflare Worker — OG meta proxy for /events/:id
+
+const SUPABASE_URL = "https://ymeanxgocsvaqeboljhh.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InltZWFueGdvY3N2YXFlYm9samhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM5MTM5MTAsImV4cCI6MjA4OTQ4OTkxMH0.G4ayBGMDEI0M8qtY3uT_YXLXSq1Qj1BEGmsqXonvQGc";
+const SITE_ORIGIN = "https://sabriev.com";
+
+const BOT_UA = /facebookexternalhit|Facebot|Twitterbot|TelegramBot|WhatsApp|LinkedInBot|Slackbot|Discordbot|Googlebot|bingbot|Pinterestbot|vkShare/i;
+
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+    const match = url.pathname.match(/^\/events\/([0-9a-f-]{36})$/i);
+
+    // Not an event page or not a bot → pass through to origin
+    if (!match || !BOT_UA.test(request.headers.get("user-agent") || "")) {
+      // Proxy to your actual site
+      const originUrl = new URL(url.pathname + url.search, SITE_ORIGIN);
+      return fetch(originUrl.toString(), { headers: request.headers });
+    }
+
+    const eventId = match[1];
+
+    // Fetch event from Supabase
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/events?id=eq.${eventId}&is_active=eq.true&select=id,title,description,image_url`,
+      {
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          Accept: "application/vnd.pgrst.object+json",
+        },
+      }
+    );
+
+    if (!res.ok) {
+      return fetch(new URL(url.pathname, SITE_ORIGIN).toString());
+    }
+
+    const event = await res.json();
+    const eventUrl = `${SITE_ORIGIN}/events/${event.id}`;
+    const description = esc((event.description || "").slice(0, 155));
+    const title = esc(event.title);
+    const imageUrl = event.image_url || `${SITE_ORIGIN}/images/events-og.jpg`;
+
+    const html = `<!DOCTYPE html>
+<html lang="bg">
+<head>
+  <meta charset="utf-8"/>
+  <title>${title} – Психолог Сердар Сабриев</title>
+  <meta name="description" content="${description}"/>
+  <link rel="canonical" href="${esc(eventUrl)}"/>
+  <meta property="og:title" content="${title}"/>
+  <meta property="og:description" content="${description}"/>
+  <meta property="og:image" content="${esc(imageUrl)}"/>
+  <meta property="og:image:width" content="1200"/>
+  <meta property="og:image:height" content="630"/>
+  <meta property="og:url" content="${esc(eventUrl)}"/>
+  <meta property="og:type" content="article"/>
+  <meta property="og:site_name" content="Психолог Сердар Сабриев"/>
+  <meta name="twitter:card" content="summary_large_image"/>
+  <meta name="twitter:title" content="${title}"/>
+  <meta name="twitter:description" content="${description}"/>
+  <meta name="twitter:image" content="${esc(imageUrl)}"/>
+  <meta http-equiv="refresh" content="0;url=${esc(eventUrl)}"/>
+</head>
+<body>
+  <p>Пренасочване към <a href="${esc(eventUrl)}">${title}</a>…</p>
+</body>
+</html>`;
+
+    return new Response(html, {
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+  },
+};
