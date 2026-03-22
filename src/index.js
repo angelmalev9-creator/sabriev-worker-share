@@ -14,8 +14,6 @@
  *   Add ?og=1 to force OG response in a normal browser
  */
 
-// Expanded crawler detection.
-// Important: Meta/Facebook often uses meta-externalagent / meta-externalfetcher now.
 const BOT_UA =
   /facebookexternalhit|Facebot|meta-externalagent|meta-externalfetcher|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Slackbot|Discordbot|Googlebot|bingbot|Baiduspider|YandexBot|vkShare|Viber|Pinterest|Embedly|Iframely|Applebot|redditbot|Snapchat|SkypeUriPreview/i;
 
@@ -26,7 +24,6 @@ export default {
     const url = new URL(request.url);
     const match = url.pathname.match(/^\/events\/([0-9a-f-]{36})\/?$/i);
 
-    // Only handle /events/:id
     if (!match) {
       return fetch(request);
     }
@@ -36,8 +33,6 @@ export default {
     const forceOg = url.searchParams.get("og") === "1";
     const isBot = BOT_UA.test(ua);
 
-    // Normal visitors -> origin site
-    // Bots OR ?og=1 -> worker OG HTML
     if (!forceOg && !isBot) {
       return fetch(request);
     }
@@ -48,7 +43,6 @@ export default {
 
     let event = null;
 
-    // 1) Try Supabase
     if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
       try {
         event = await fetchEventFromSupabase(eventId, env);
@@ -57,12 +51,10 @@ export default {
       }
     }
 
-    // 2) Optional local fallback map
     if (!event) {
       event = LOCAL_EVENT_MAP[eventId] || null;
     }
 
-    // 3) Generic fallback OG
     if (!event) {
       return buildOgResponse({
         title: "Събитие – Психолог Сердар Сабриев",
