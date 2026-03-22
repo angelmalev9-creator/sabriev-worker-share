@@ -1,23 +1,17 @@
 /**
- * Cloudflare Worker – Dynamic OG Meta for /events/:id
+ * Cloudflare Worker – Dynamic OG Meta for share.sabriev.com/events/:id
  *
- * Environment variables:
+ * Required env vars:
+ *   SITE_ORIGIN
+ *
+ * Optional env vars:
  *   SUPABASE_URL
  *   SUPABASE_ANON_KEY
- *   SITE_ORIGIN
  *   FALLBACK_IMAGE
- *
- * Custom domain:
- *   share.sabriev.com
- *
- * Debug:
- *   Add ?og=1 to force OG response in a normal browser
  */
 
-const BOT_UA =
-  /facebookexternalhit|Facebot|meta-externalagent|meta-externalfetcher|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Slackbot|Discordbot|Googlebot|bingbot|Baiduspider|YandexBot|vkShare|Viber|Pinterest|Embedly|Iframely|Applebot|redditbot|Snapchat|SkypeUriPreview/i;
-
 const DEFAULT_FALLBACK_OG_IMAGE = "https://sabriev.com/images/events-og.jpg";
+const SHARE_ORIGIN = "https://share.sabriev.com";
 
 export default {
   async fetch(request, env) {
@@ -29,24 +23,14 @@ export default {
     }
 
     const eventId = match[1];
-    const ua = request.headers.get("user-agent") || "";
-    const forceOg = url.searchParams.get("og") === "1";
-    const isBot = BOT_UA.test(ua);
-
     const siteOrigin = (env.SITE_ORIGIN || "https://sabriev.com").replace(/\/$/, "");
     const fallbackImage = env.FALLBACK_IMAGE || DEFAULT_FALLBACK_OG_IMAGE;
 
-    // Реалната страница, към която да пренасочим човека след click
+    const shareEventUrl = `${SHARE_ORIGIN}/events/${eventId}`;
     const realEventUrl = `${siteOrigin}/events/${eventId}`;
-
-    // Ако не е бот и не е debug mode, просто redirect към реалната страница
-    if (!forceOg && !isBot) {
-      return Response.redirect(realEventUrl, 302);
-    }
 
     let event = null;
 
-    // 1) Опит със Supabase
     if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
       try {
         event = await fetchEventFromSupabase(eventId, env);
@@ -55,25 +39,21 @@ export default {
       }
     }
 
-    // 2) Fallback към локален map
     if (!event) {
       event = LOCAL_EVENT_MAP[eventId] || null;
     }
 
-    // 3) Generic fallback, ако няма данни
     if (!event) {
       return buildOgResponse({
         title: "Събитие – Психолог Сердар Сабриев",
         description:
           "Предстоящи събития, семинари и групови занимания с психолог Сердар Сабриев.",
         imageUrl: fallbackImage,
-        canonicalUrl: realEventUrl,
+        canonicalUrl: shareEventUrl,
         redirectUrl: realEventUrl,
-        isDebugView: forceOg,
         debug: {
           reason: "event_not_found",
           eventId,
-          ua,
         },
       });
     }
@@ -86,13 +66,11 @@ export default {
       title,
       description,
       imageUrl,
-      canonicalUrl: realEventUrl,
+      canonicalUrl: shareEventUrl,
       redirectUrl: realEventUrl,
-      isDebugView: forceOg,
       debug: {
         reason: "event_found",
         eventId,
-        ua,
         imageUrl,
       },
     });
@@ -137,7 +115,6 @@ function buildOgResponse({
   imageUrl,
   canonicalUrl,
   redirectUrl,
-  isDebugView = false,
   debug = {},
 }) {
   const safeTitle = esc(title);
@@ -180,12 +157,12 @@ function buildOgResponse({
   <meta name="twitter:description" content="${safeDescription}" />
   <meta name="twitter:image" content="${safeImageUrl}" />
 
-  ${isDebugView ? "" : `<meta http-equiv="refresh" content="0;url=${safeRedirectUrl}" />`}
+  <meta http-equiv="refresh" content="0;url=${safeRedirectUrl}" />
   ${debugComment}
 </head>
 <body>
-  ${isDebugView ? "" : `<script>window.location.replace(${JSON.stringify(redirectUrl)});</script>`}
-  <p>${isDebugView ? "OG debug mode" : "Пренасочване към"} <a href="${safeRedirectUrl}">${safeTitle}</a></p>
+  <script>window.location.replace(${JSON.stringify(redirectUrl)});</script>
+  <p>Пренасочване към <a href="${safeRedirectUrl}">${safeTitle}</a></p>
 </body>
 </html>`;
 
