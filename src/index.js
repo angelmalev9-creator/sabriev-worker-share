@@ -1,13 +1,17 @@
 /**
  * Cloudflare Worker – Dynamic OG Meta for /events/:id
  *
- * Environment variables (set in Cloudflare dashboard → Worker Settings → Variables):
- *   SUPABASE_URL            – e.g. https://ymeanxgocsvaqeboljhh.supabase.co
- *   SUPABASE_ANON_KEY       – the public anon key
- *   SITE_ORIGIN             – e.g. https://sabriev.com  (no trailing slash)
- *   FALLBACK_IMAGE          – (optional) default OG image URL
+ * Environment variables:
+ *   SUPABASE_URL
+ *   SUPABASE_ANON_KEY
+ *   SITE_ORIGIN
+ *   FALLBACK_IMAGE
  *
- * Route trigger: sabriev.com/events/*
+ * Route trigger:
+ *   sabriev.com/events/*
+ *
+ * Debug:
+ *   Add ?og=1 to force OG response in a normal browser
  */
 
 const BOT_UA =
@@ -20,66 +24,67 @@ export default {
     const url = new URL(request.url);
     const match = url.pathname.match(/^\/events\/([0-9a-f-]{36})\/?$/i);
 
-    // Not an event detail route → pass through to origin
+    // Only handle /events/:id
     if (!match) {
       return fetch(request);
     }
 
     const eventId = match[1];
     const ua = request.headers.get("user-agent") || "";
+    const forceOg = url.searchParams.get("og") === "1";
+    const isBot = BOT_UA.test(ua);
 
-    // Regular visitors → proxy to origin (SPA handles rendering)
-    if (!BOT_UA.test(ua)) {
+    // For normal visitors, let the origin site handle the page.
+    // For bots OR debug mode (?og=1), return OG HTML.
+    if (!forceOg && !isBot) {
       return fetch(request);
     }
 
-    // --- Bot / crawler path ---
-    const siteOrigin = env.SITE_ORIGIN || "https://sabriev.com";
+    const siteOrigin = (env.SITE_ORIGIN || "https://sabriev.com").replace(/\/$/, "");
     const fallbackImage = env.FALLBACK_IMAGE || FALLBACK_OG_IMAGE;
+    const eventUrl = `${siteOrigin}/events/${eventId}`;
 
     let event = null;
 
-    // Try fetching from Supabase if keys are configured
+    // 1) Try Supabase
     if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
       try {
         event = await fetchEventFromSupabase(eventId, env);
       } catch (err) {
-        console.error("Supabase fetch failed:", err.message);
+        console.error("Supabase fetch failed:", err?.message || String(err));
       }
     }
 
-    // Fallback: local event map (fill in while you don't have env vars)
+    // 2) Fallback local map
     if (!event) {
       event = LOCAL_EVENT_MAP[eventId] || null;
     }
 
-    // If still nothing, return a generic OG page
+    // 3) Generic fallback OG if event missing
     if (!event) {
       return buildOgResponse({
         title: "Събитие – Психолог Сердар Сабриев",
         description:
           "Предстоящи събития, семинари и групови занимания с психолог Сердар Сабриев.",
         imageUrl: fallbackImage,
-        eventUrl: `${siteOrigin}/events/${eventId}`,
-        siteOrigin,
+        eventUrl,
+        isDebugView: forceOg,
       });
     }
 
-    const eventUrl = `${siteOrigin}/events/${eventId}`;
-    const imageUrl = event.image_url || event.imageUrl || fallbackImage;
+    const title = cleanText(event.title || "Събитие");
     const description = truncate(event.description || "", 155);
+    const imageUrl = cleanText(event.image_url || event.imageUrl || fallbackImage);
 
     return buildOgResponse({
-      title: `${event.title} – Психолог Сердар Сабриев`,
+      title: `${title} – Психолог Сердар Сабриев`,
       description,
       imageUrl,
       eventUrl,
-      siteOrigin,
+      isDebugView: forceOg,
     });
   },
 };
-
-// ─── Supabase fetch ──────────────────────────────────────────────────────────
 
 async function fetchEventFromSupabase(eventId, env) {
   const params = new URLSearchParams({
@@ -96,54 +101,61 @@ async function fetchEventFromSupabase(eventId, env) {
         Authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
         Accept: "application/json",
       },
-      cf: { cacheTtl: 300 }, // cache 5 min at edge
+      cf: {
+        cacheTtl: 300,
+        cacheEverything: true,
+      },
     }
   );
 
-  if (!res.ok) return null;
+  if (!res.ok) {
+    const text = await safeReadText(res);
+    console.error("Supabase error:", res.status, text);
+    return null;
+  }
 
   const rows = await res.json();
-  return rows.length ? rows[0] : null;
+  return Array.isArray(rows) && rows.length ? rows[0] : null;
 }
 
-// ─── HTML builder ────────────────────────────────────────────────────────────
+function buildOgResponse({ title, description, imageUrl, eventUrl, isDebugView = false }) {
+  const safeTitle = esc(title);
+  const safeDescription = esc(description);
+  const safeImageUrl = esc(imageUrl);
+  const safeEventUrl = esc(eventUrl);
 
-function buildOgResponse({ title, description, imageUrl, eventUrl, siteOrigin }) {
   const html = `<!DOCTYPE html>
 <html lang="bg">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>${esc(title)}</title>
-  <meta name="description" content="${esc(description)}" />
-  <link rel="canonical" href="${esc(eventUrl)}" />
+  <title>${safeTitle}</title>
+  <meta name="description" content="${safeDescription}" />
+  <link rel="canonical" href="${safeEventUrl}" />
 
-  <!-- Open Graph -->
   <meta property="og:type" content="article" />
-  <meta property="og:title" content="${esc(title)}" />
-  <meta property="og:description" content="${esc(description)}" />
-  <meta property="og:url" content="${esc(eventUrl)}" />
-  <meta property="og:image" content="${esc(imageUrl)}" />
-  <meta property="og:image:secure_url" content="${esc(imageUrl)}" />
+  <meta property="og:title" content="${safeTitle}" />
+  <meta property="og:description" content="${safeDescription}" />
+  <meta property="og:url" content="${safeEventUrl}" />
+  <meta property="og:image" content="${safeImageUrl}" />
+  <meta property="og:image:secure_url" content="${safeImageUrl}" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
-  <meta property="og:image:alt" content="${esc(title)}" />
+  <meta property="og:image:alt" content="${safeTitle}" />
   <meta property="og:locale" content="bg_BG" />
   <meta property="og:site_name" content="Психолог Сердар Сабриев" />
 
-  <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="${esc(title)}" />
-  <meta name="twitter:description" content="${esc(description)}" />
-  <meta name="twitter:image" content="${esc(imageUrl)}" />
+  <meta name="twitter:title" content="${safeTitle}" />
+  <meta name="twitter:description" content="${safeDescription}" />
+  <meta name="twitter:image" content="${safeImageUrl}" />
 
-  <!-- Redirect real visitors that slip through -->
-  <meta http-equiv="refresh" content="0;url=${esc(eventUrl)}" />
+  ${isDebugView ? "" : `<meta http-equiv="refresh" content="0;url=${safeEventUrl}" />`}
 </head>
 <body>
-  <script>window.location.replace(${JSON.stringify(eventUrl)});</script>
-  <p>Пренасочване към <a href="${esc(eventUrl)}">${esc(title)}</a>…</p>
+  ${isDebugView ? "" : `<script>window.location.replace(${JSON.stringify(eventUrl)});</script>`}
+  <p>${isDebugView ? "OG debug mode" : "Пренасочване към"} <a href="${safeEventUrl}">${safeTitle}</a></p>
 </body>
 </html>`;
 
@@ -152,14 +164,13 @@ function buildOgResponse({ title, description, imageUrl, eventUrl, siteOrigin })
     headers: {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "public, max-age=300, s-maxage=600",
+      "X-OG-Worker": "sabriev-events-og",
     },
   });
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function esc(str) {
-  return String(str)
+function esc(value) {
+  return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -167,16 +178,27 @@ function esc(str) {
 }
 
 function truncate(value, max) {
-  const normalized = value.replace(/\s+/g, " ").trim();
+  const normalized = cleanText(value);
+  if (!normalized) return "Вижте повече за събитието на Сердар Сабриев.";
   return normalized.length <= max
     ? normalized
     : normalized.slice(0, max - 1).trim() + "…";
 }
 
-// ─── Local fallback map (optional, remove once env vars are set) ─────────────
+function cleanText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+async function safeReadText(res) {
+  try {
+    return await res.text();
+  } catch {
+    return "";
+  }
+}
 
 const LOCAL_EVENT_MAP = {
-  // "some-uuid": {
+  // "uuid-here": {
   //   title: "Примерно събитие",
   //   description: "Кратко описание на събитието.",
   //   imageUrl: "https://sabriev.com/images/example.jpg",
