@@ -13,6 +13,10 @@
 const DEFAULT_FALLBACK_OG_IMAGE = "https://sabriev.com/images/events-og.jpg";
 const SHARE_ORIGIN = "https://share.sabriev.com";
 
+// Important: include modern Meta/Facebook crawlers
+const BOT_UA =
+  /facebookexternalhit|Facebot|meta-externalagent|meta-externalfetcher|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Slackbot|Discordbot|Googlebot|bingbot|Baiduspider|YandexBot|vkShare|Viber|Pinterest|Embedly|Iframely|Applebot|redditbot|Snapchat|SkypeUriPreview/i;
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -23,6 +27,10 @@ export default {
     }
 
     const eventId = match[1];
+    const ua = request.headers.get("user-agent") || "";
+    const isBot = BOT_UA.test(ua);
+    const forceOg = url.searchParams.get("og") === "1";
+
     const siteOrigin = (env.SITE_ORIGIN || "https://sabriev.com").replace(/\/$/, "");
     const fallbackImage = env.FALLBACK_IMAGE || DEFAULT_FALLBACK_OG_IMAGE;
 
@@ -43,35 +51,50 @@ export default {
       event = LOCAL_EVENT_MAP[eventId] || null;
     }
 
-    if (!event) {
+    const ogData = event
+      ? {
+          title: cleanText(event.title || "Събитие"),
+          description: truncate(event.description || "", 180),
+          imageUrl: cleanText(event.image_url || event.imageUrl || fallbackImage),
+        }
+      : {
+          title: "Събитие – Психолог Сердар Сабриев",
+          description:
+            "Предстоящи събития, семинари и групови занимания с психолог Сердар Сабриев.",
+          imageUrl: fallbackImage,
+        };
+
+    // Bots and ?og=1 get pure OG page with NO redirect
+    if (isBot || forceOg) {
       return buildOgResponse({
-        title: "Събитие – Психолог Сердар Сабриев",
-        description:
-          "Предстоящи събития, семинари и групови занимания с психолог Сердар Сабриев.",
-        imageUrl: fallbackImage,
+        title: ogData.title,
+        description: ogData.description,
+        imageUrl: ogData.imageUrl,
         canonicalUrl: shareEventUrl,
         redirectUrl: realEventUrl,
+        shouldRedirect: false,
         debug: {
-          reason: "event_not_found",
+          mode: forceOg ? "debug" : "bot",
           eventId,
+          found: !!event,
+          ua,
         },
       });
     }
 
-    const title = cleanText(event.title || "Събитие");
-    const description = truncate(event.description || "", 180);
-    const imageUrl = cleanText(event.image_url || event.imageUrl || fallbackImage);
-
+    // Real users get OG page + redirect to actual site
     return buildOgResponse({
-      title,
-      description,
-      imageUrl,
+      title: ogData.title,
+      description: ogData.description,
+      imageUrl: ogData.imageUrl,
       canonicalUrl: shareEventUrl,
       redirectUrl: realEventUrl,
+      shouldRedirect: true,
       debug: {
-        reason: "event_found",
+        mode: "user",
         eventId,
-        imageUrl,
+        found: !!event,
+        ua,
       },
     });
   },
@@ -115,6 +138,7 @@ function buildOgResponse({
   imageUrl,
   canonicalUrl,
   redirectUrl,
+  shouldRedirect,
   debug = {},
 }) {
   const safeTitle = esc(title);
@@ -129,6 +153,14 @@ function buildOgResponse({
       ...debug,
     })
   )} -->`;
+
+  const redirectMeta = shouldRedirect
+    ? `<meta http-equiv="refresh" content="0;url=${safeRedirectUrl}" />`
+    : "";
+
+  const redirectScript = shouldRedirect
+    ? `<script>window.location.replace(${JSON.stringify(redirectUrl)});</script>`
+    : "";
 
   const html = `<!DOCTYPE html>
 <html lang="bg">
@@ -157,12 +189,12 @@ function buildOgResponse({
   <meta name="twitter:description" content="${safeDescription}" />
   <meta name="twitter:image" content="${safeImageUrl}" />
 
-  <meta http-equiv="refresh" content="0;url=${safeRedirectUrl}" />
+  ${redirectMeta}
   ${debugComment}
 </head>
 <body>
-  <script>window.location.replace(${JSON.stringify(redirectUrl)});</script>
-  <p>Пренасочване към <a href="${safeRedirectUrl}">${safeTitle}</a></p>
+  ${redirectScript}
+  <p>${shouldRedirect ? "Пренасочване към" : "Преглед на събитие"} <a href="${safeRedirectUrl}">${safeTitle}</a></p>
 </body>
 </html>`;
 
