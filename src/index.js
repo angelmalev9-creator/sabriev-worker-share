@@ -33,12 +33,12 @@ export default {
 
     // OG image proxy
     if (url.pathname.startsWith("/og-image/")) {
-      const eventId = extractEventIdFromOgImagePath(url.pathname);
+      const eventId = extractEventId(url.pathname, "/og-image/");
       if (!eventId) return new Response("Not found", { status: 404 });
       return handleImageProxy(eventId, env);
     }
 
-    const eventId = extractEventIdFromEventPath(url.pathname);
+    const eventId = extractEventId(url.pathname, "/events/");
     if (!eventId) {
       return new Response("Not found", { status: 404 });
     }
@@ -55,19 +55,10 @@ export default {
     const eventResult = await getEvent(eventId, env);
     const event = eventResult.event;
 
-    const title =
-      cleanText(
-        event?.title ||
-          event?.name ||
-          event?.event_title ||
-          "Събитие – Психолог Сердар Сабриев"
-      );
+    const title = cleanText(event?.title || "Събитие – Психолог Сердар Сабриев");
 
     const description = truncate(
-      event?.description ||
-        event?.desc ||
-        event?.content ||
-        "Предстоящи събития, семинари и групови занимания.",
+      event?.description || "Предстоящи събития, семинари и групови занимания.",
       180
     );
 
@@ -89,18 +80,6 @@ export default {
           found: !!event,
           fetchStatus: eventResult.status,
           fetchReason: eventResult.reason,
-          hasSupabaseUrl: !!env.SUPABASE_URL,
-          hasSupabaseAnonKey: !!env.SUPABASE_ANON_KEY,
-          rawKeys: event ? Object.keys(event) : [],
-          titleValue:
-            event?.title || event?.name || event?.event_title || null,
-          imageValue:
-            event?.image_url ||
-            event?.image ||
-            event?.cover ||
-            event?.thumbnail ||
-            event?.banner ||
-            null,
         },
       });
     }
@@ -109,33 +88,29 @@ export default {
   },
 };
 
-function extractEventIdFromEventPath(pathname) {
-  const match = pathname.match(/^\/events\/([0-9a-f-]{36})\/?$/i);
-  return match ? match[1] : null;
-}
+// ─── Helpers ────────────────────────────────────────────────
 
-function extractEventIdFromOgImagePath(pathname) {
-  const match = pathname.match(/^\/og-image\/([0-9a-f-]{36})\/?$/i);
-  return match ? match[1] : null;
+function extractEventId(pathname, prefix) {
+  if (!pathname.startsWith(prefix)) return null;
+  const rest = pathname.slice(prefix.length).replace(/\/$/, "");
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rest)
+    ? rest
+    : null;
 }
 
 async function getEvent(eventId, env) {
   if (!env.SUPABASE_URL) {
     return { event: null, status: "error", reason: "missing SUPABASE_URL" };
   }
-
   if (!env.SUPABASE_ANON_KEY) {
-    return {
-      event: null,
-      status: "error",
-      reason: "missing SUPABASE_ANON_KEY",
-    };
+    return { event: null, status: "error", reason: "missing SUPABASE_ANON_KEY" };
   }
 
   const baseUrl = String(env.SUPABASE_URL).replace(/\/$/, "");
   const query = new URLSearchParams({
-    select: "*",
+    select: "id,title,description,image_url",
     id: `eq.${eventId}`,
+    is_active: "eq.true",
   });
 
   const endpoint = `${baseUrl}/rest/v1/events?${query.toString()}`;
@@ -147,10 +122,7 @@ async function getEvent(eventId, env) {
         Authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
         Accept: "application/json",
       },
-      cf: {
-        cacheTtl: 60,
-        cacheEverything: true,
-      },
+      cf: { cacheTtl: 60, cacheEverything: true },
     });
 
     const rawText = await safeReadText(res);
@@ -170,58 +142,18 @@ async function getEvent(eventId, env) {
       return {
         event: null,
         status: "parse_error",
-        reason: `invalid JSON from Supabase: ${rawText.slice(0, 300)}`,
+        reason: `invalid JSON: ${rawText.slice(0, 300)}`,
       };
     }
 
     if (!Array.isArray(rows) || rows.length === 0) {
-      return {
-        event: null,
-        status: "not_found",
-        reason: "no matching row in events",
-      };
+      return { event: null, status: "not_found", reason: "no matching active event" };
     }
 
-    const row = rows[0];
-
-    return {
-      event: normalizeEventRow(row),
-      status: "ok",
-      reason: "event loaded",
-    };
+    return { event: rows[0], status: "ok", reason: "event loaded" };
   } catch (err) {
-    return {
-      event: null,
-      status: "fetch_error",
-      reason: err?.message || String(err),
-    };
+    return { event: null, status: "fetch_error", reason: err?.message || String(err) };
   }
-}
-
-function normalizeEventRow(row) {
-  return {
-    ...row,
-    title:
-      row.title ??
-      row.name ??
-      row.event_title ??
-      row.heading ??
-      null,
-    description:
-      row.description ??
-      row.desc ??
-      row.content ??
-      row.text ??
-      null,
-    image_url:
-      row.image_url ??
-      row.image ??
-      row.cover ??
-      row.thumbnail ??
-      row.banner ??
-      row.photo ??
-      null,
-  };
 }
 
 async function handleImageProxy(eventId, env) {
@@ -231,22 +163,16 @@ async function handleImageProxy(eventId, env) {
 
   try {
     const imgRes = await fetch(imageUrl, {
-      cf: {
-        cacheTtl: 86400,
-        cacheEverything: true,
-      },
+      cf: { cacheTtl: 86400, cacheEverything: true },
     });
 
     if (!imgRes.ok) {
-      return await proxyFallbackImage(
-        fallbackImage,
-        `image fetch failed: ${imgRes.status}`
-      );
+      return proxyFallbackImage(fallbackImage);
     }
 
     let contentType = imgRes.headers.get("content-type") || "";
     if (!contentType.startsWith("image/")) {
-      contentType = detectImageContentTypeFromUrl(imageUrl) || "image/jpeg";
+      contentType = detectImageType(imageUrl) || "image/jpeg";
     }
 
     return new Response(imgRes.body, {
@@ -254,74 +180,48 @@ async function handleImageProxy(eventId, env) {
       headers: {
         "Content-Type": contentType,
         "Cache-Control": "public, max-age=86400, s-maxage=86400",
-        "X-OG-Image-Source": imageUrl,
       },
     });
-  } catch (err) {
-    return await proxyFallbackImage(
-      fallbackImage,
-      err?.message || "unknown image proxy error"
-    );
+  } catch {
+    return proxyFallbackImage(fallbackImage);
   }
 }
 
-async function proxyFallbackImage(fallbackImage, reason) {
+async function proxyFallbackImage(fallbackImage) {
   try {
     const res = await fetch(fallbackImage);
     const contentType =
-      res.headers.get("content-type") ||
-      detectImageContentTypeFromUrl(fallbackImage) ||
-      "image/jpeg";
-
+      res.headers.get("content-type") || detectImageType(fallbackImage) || "image/jpeg";
     return new Response(res.body, {
       status: 200,
       headers: {
         "Content-Type": contentType,
         "Cache-Control": "public, max-age=86400, s-maxage=86400",
-        "X-OG-Image-Fallback": "1",
-        "X-OG-Image-Reason": reason,
       },
     });
   } catch {
-    return new Response("Fallback image unavailable", { status: 500 });
+    return new Response("Image unavailable", { status: 500 });
   }
 }
 
-function detectImageContentTypeFromUrl(url) {
-  const lower = String(url).toLowerCase();
-  if (lower.endsWith(".png")) return "image/png";
-  if (lower.endsWith(".webp")) return "image/webp";
-  if (lower.endsWith(".gif")) return "image/gif";
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+function detectImageType(url) {
+  const l = String(url).toLowerCase();
+  if (l.endsWith(".png")) return "image/png";
+  if (l.endsWith(".webp")) return "image/webp";
+  if (l.endsWith(".gif")) return "image/gif";
+  if (l.endsWith(".jpg") || l.endsWith(".jpeg")) return "image/jpeg";
   return null;
 }
 
-function buildOgResponse({
-  title,
-  description,
-  imageUrl,
-  ogUrl,
-  canonicalUrl,
-  fbAppId,
-  debug = {},
-}) {
-  const safeTitle = esc(title);
-  const safeDescription = esc(description);
-  const safeImageUrl = esc(imageUrl);
-  const safeOgUrl = esc(ogUrl);
-  const safeCanonicalUrl = esc(canonicalUrl);
-  const safeFbAppId = esc(fbAppId || "");
+function buildOgResponse({ title, description, imageUrl, ogUrl, canonicalUrl, fbAppId, debug = {} }) {
+  const t = esc(title);
+  const d = esc(description);
+  const img = esc(imageUrl);
+  const u = esc(ogUrl);
+  const c = esc(canonicalUrl);
+  const fb = esc(fbAppId || "");
 
-  const debugComment = `<!-- ${esc(
-    JSON.stringify({
-      worker: "sabriev-events-og",
-      ...debug,
-    })
-  )} -->`;
-
-  const fbAppMeta = safeFbAppId
-    ? `<meta property="fb:app_id" content="${safeFbAppId}" />`
-    : "";
+  const fbMeta = fb ? `<meta property="fb:app_id" content="${fb}" />` : "";
 
   const html = `<!DOCTYPE html>
 <html lang="bg">
@@ -329,33 +229,32 @@ function buildOgResponse({
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>${safeTitle}</title>
-  <meta name="description" content="${safeDescription}" />
-  <link rel="canonical" href="${safeCanonicalUrl}" />
+  <title>${t}</title>
+  <meta name="description" content="${d}" />
+  <link rel="canonical" href="${c}" />
 
   <meta property="og:type" content="article" />
-  <meta property="og:title" content="${safeTitle}" />
-  <meta property="og:description" content="${safeDescription}" />
-  <meta property="og:url" content="${safeOgUrl}" />
-  <meta property="og:image" content="${safeImageUrl}" />
-  <meta property="og:image:secure_url" content="${safeImageUrl}" />
+  <meta property="og:title" content="${t}" />
+  <meta property="og:description" content="${d}" />
+  <meta property="og:url" content="${u}" />
+  <meta property="og:image" content="${img}" />
+  <meta property="og:image:secure_url" content="${img}" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
-  <meta property="og:image:alt" content="${safeTitle}" />
+  <meta property="og:image:alt" content="${t}" />
   <meta property="og:locale" content="bg_BG" />
   <meta property="og:site_name" content="Психолог Сердар Сабриев" />
-  ${fbAppMeta}
+  ${fbMeta}
 
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="${safeTitle}" />
-  <meta name="twitter:description" content="${safeDescription}" />
-  <meta name="twitter:image" content="${safeImageUrl}" />
+  <meta name="twitter:title" content="${t}" />
+  <meta name="twitter:description" content="${d}" />
+  <meta name="twitter:image" content="${img}" />
 
-  <meta name="x-debug" content="${esc(JSON.stringify(debug))}" />
-  ${debugComment}
+  <!-- debug: ${esc(JSON.stringify(debug))} -->
 </head>
 <body>
-  <p>${safeTitle}</p>
+  <p>${t}</p>
 </body>
 </html>`;
 
@@ -364,7 +263,6 @@ function buildOgResponse({
     headers: {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "public, max-age=300, s-maxage=600",
-      "X-OG-Worker": "sabriev-events-og",
     },
   });
 }
@@ -378,11 +276,9 @@ function esc(value) {
 }
 
 function truncate(value, max) {
-  const normalized = cleanText(value);
-  if (!normalized) return "Вижте повече за събитието на Сердар Сабриев.";
-  return normalized.length <= max
-    ? normalized
-    : normalized.slice(0, max - 1).trim() + "…";
+  const s = cleanText(value);
+  if (!s) return "Вижте повече за събитието на Сердар Сабриев.";
+  return s.length <= max ? s : s.slice(0, max - 1).trim() + "…";
 }
 
 function cleanText(value) {
@@ -390,19 +286,12 @@ function cleanText(value) {
 }
 
 async function safeReadText(res) {
-  try {
-    return await res.text();
-  } catch {
-    return "";
-  }
+  try { return await res.text(); } catch { return ""; }
 }
 
 function json(data, init = {}) {
   return new Response(JSON.stringify(data, null, 2), {
     status: init.status || 200,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      ...(init.headers || {}),
-    },
+    headers: { "Content-Type": "application/json; charset=utf-8", ...(init.headers || {}) },
   });
 }
