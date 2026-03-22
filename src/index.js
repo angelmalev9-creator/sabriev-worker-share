@@ -1,5 +1,5 @@
 /**
- * Cloudflare Worker – Dynamic OG Meta (FINAL)
+ * Cloudflare Worker – Dynamic OG Meta (FINAL STABLE)
  */
 
 const DEFAULT_FALLBACK_OG_IMAGE = "https://sabriev.com/images/events-og.jpg";
@@ -33,26 +33,26 @@ export default {
 
     const event = await getEvent(eventId, env);
 
-    const imageUrl = `${SHARE_ORIGIN}/og-image/${eventId}`;
+    const imageProxy = `${SHARE_ORIGIN}/og-image/${eventId}`;
 
-    const og = event
-      ? {
-          title: clean(event.title),
-          description: truncate(event.description),
-          image: imageUrl,
-        }
-      : {
-          title: "Събитие – Психолог Сердар Сабриев",
-          description:
-            "Предстоящи събития, семинари и групови занимания.",
-          image: imageUrl,
-        };
+    const og = {
+      title: event?.title || "Събитие – Психолог Сердар Сабриев",
+      description:
+        event?.description ||
+        "Предстоящи събития, семинари и групови занимания.",
+      image: imageProxy,
+    };
 
     if (isBot || forceOg) {
       return buildHtml({
         ...og,
         url: shareUrl,
-        debug: { eventId, found: !!event },
+        debug: {
+          eventId,
+          found: !!event,
+          rawTitle: event?.title || null,
+          rawImage: event?.image || null,
+        },
       });
     }
 
@@ -62,13 +62,13 @@ export default {
 
 
 
-// 🔥 MAIN EVENT FETCH (УЛТРА СТАБИЛЕН)
+// 🔥 ULTRA SAFE EVENT FETCH
 async function getEvent(eventId, env) {
-  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return LOCAL_EVENT_MAP[eventId] || null;
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return null;
 
   try {
     const res = await fetch(
-      `${env.SUPABASE_URL}/rest/v1/events?id=eq.${eventId}`,
+      `${env.SUPABASE_URL}/rest/v1/events?id=eq.${eventId}&select=*`,
       {
         headers: {
           apikey: env.SUPABASE_ANON_KEY,
@@ -77,31 +77,47 @@ async function getEvent(eventId, env) {
       }
     );
 
-    if (!res.ok) return LOCAL_EVENT_MAP[eventId] || null;
+    if (!res.ok) return null;
 
-    const data = await res.json();
-    const e = data?.[0];
+    const rows = await res.json();
+    const e = rows?.[0];
+    if (!e) return null;
 
-    if (!e) return LOCAL_EVENT_MAP[eventId] || null;
+    // 🔥 универсално четене
+    const image =
+      e.image_url ||
+      e.image ||
+      e.cover ||
+      e.thumbnail ||
+      e.banner ||
+      e.photo ||
+      null;
 
-    return {
-      title: e.title || e.name,
-      description: e.description || e.desc,
-      image:
-        e.image_url ||
-        e.image ||
-        e.cover ||
-        e.thumbnail ||
-        null,
-    };
-  } catch {
-    return LOCAL_EVENT_MAP[eventId] || null;
+    const title =
+      e.title ||
+      e.name ||
+      e.event_title ||
+      e.heading ||
+      null;
+
+    const description =
+      e.description ||
+      e.desc ||
+      e.content ||
+      e.text ||
+      null;
+
+    return { title, description, image };
+
+  } catch (err) {
+    console.error("Supabase fetch failed:", err);
+    return null;
   }
 }
 
 
 
-// 🔥 IMAGE PROXY (FACEBOOK FIX)
+// 🔥 IMAGE PROXY (CRITICAL FOR FACEBOOK)
 async function handleImageProxy(eventId, env) {
   const event = await getEvent(eventId, env);
 
@@ -114,6 +130,7 @@ async function handleImageProxy(eventId, env) {
 
     let type = res.headers.get("content-type");
 
+    // 🔥 FORCE VALID TYPE
     if (!type || !type.startsWith("image/")) {
       type = "image/jpeg";
     }
@@ -124,6 +141,7 @@ async function handleImageProxy(eventId, env) {
         "Cache-Control": "public, max-age=31536000",
       },
     });
+
   } catch {
     return fetch(DEFAULT_FALLBACK_OG_IMAGE);
   }
@@ -131,10 +149,10 @@ async function handleImageProxy(eventId, env) {
 
 
 
-// 🔥 HTML OG RESPONSE
+// 🔥 OG HTML
 function buildHtml({ title, description, image, url, debug }) {
   return new Response(
-    `<!DOCTYPE html>
+`<!DOCTYPE html>
 <html lang="bg">
 <head>
 <meta charset="utf-8" />
@@ -145,6 +163,7 @@ function buildHtml({ title, description, image, url, debug }) {
 <meta property="og:title" content="${esc(title)}" />
 <meta property="og:description" content="${esc(description)}" />
 <meta property="og:url" content="${esc(url)}" />
+
 <meta property="og:image" content="${esc(image)}" />
 <meta property="og:image:secure_url" content="${esc(image)}" />
 <meta property="og:image:type" content="image/jpeg" />
@@ -179,18 +198,3 @@ function esc(v) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
-
-function clean(v) {
-  return String(v || "").trim();
-}
-
-function truncate(v) {
-  v = clean(v);
-  if (!v) return "Вижте повече за събитието.";
-  return v.length > 180 ? v.slice(0, 180) + "..." : v;
-}
-
-
-
-// 🔥 FALLBACK (не го пипам)
-const LOCAL_EVENT_MAP = {};
