@@ -1,5 +1,5 @@
 /**
- * Cloudflare Worker – Dynamic OG Meta (FINAL FIXED)
+ * Cloudflare Worker – Dynamic OG Meta (FINAL REAL FIX)
  */
 
 const DEFAULT_FALLBACK_OG_IMAGE = "https://sabriev.com/images/events-og.jpg";
@@ -50,8 +50,7 @@ export default {
         debug: {
           eventId,
           found: !!event,
-          title: event?.title || null,
-          image: event?.image || null,
+          event: event || null,
         },
       });
     }
@@ -62,13 +61,13 @@ export default {
 
 
 
-// 🔥 SMART EVENT FETCH (NO GUESSING ANYMORE)
+// 🔥 REAL SUPABASE FETCH (NO GUESS, NO MAGIC)
 async function getEvent(eventId, env) {
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return null;
 
   try {
     const res = await fetch(
-      `${env.SUPABASE_URL}/rest/v1/events?id=eq.${eventId}&select=*`,
+      `${env.SUPABASE_URL}/rest/v1/events?select=*&id=eq.${eventId}`,
       {
         headers: {
           apikey: env.SUPABASE_ANON_KEY,
@@ -77,46 +76,49 @@ async function getEvent(eventId, env) {
       }
     );
 
-    if (!res.ok) return null;
+    const text = await res.text();
 
-    const rows = await res.json();
-    const e = rows?.[0];
-    if (!e) return null;
+    // DEBUG
+    console.log("RAW SUPABASE:", text);
 
-    // 🔥 AUTO DETECT TITLE
-    const title =
-      e.title ||
-      e.name ||
-      e.event_title ||
-      Object.values(e).find(
-        v => typeof v === "string" && v.length > 10 && v.length < 120
-      );
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return null;
+    }
 
-    // 🔥 AUTO DETECT IMAGE
-    const image =
-      e.image_url ||
-      e.image ||
-      e.cover ||
-      e.thumbnail ||
-      Object.values(e).find(
-        v =>
-          typeof v === "string" &&
-          v.startsWith("http") &&
-          (v.includes("supabase") || v.includes("storage"))
-      );
+    if (!Array.isArray(data) || !data.length) return null;
 
-    // 🔥 AUTO DETECT DESCRIPTION
-    const description =
-      e.description ||
-      e.desc ||
-      Object.values(e).find(
-        v => typeof v === "string" && v.length > 50
-      );
+    const e = data[0];
 
-    return { title, description, image };
+    // 🔥 ТУК СЕ ОПРЕДЕЛЯТ РЕАЛНИТЕ КОЛОНИ
+    return {
+      title:
+        e.title ||
+        e.name ||
+        e.event_title ||
+        e.heading ||
+        null,
+
+      description:
+        e.description ||
+        e.desc ||
+        e.content ||
+        e.text ||
+        null,
+
+      image:
+        e.image_url ||
+        e.image ||
+        e.cover ||
+        e.thumbnail ||
+        e.banner ||
+        null,
+    };
 
   } catch (err) {
-    console.error("Supabase fetch error:", err);
+    console.error("SUPABASE ERROR:", err);
     return null;
   }
 }
@@ -178,7 +180,8 @@ function buildHtml({ title, description, image, url, debug }) {
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:image" content="${esc(image)}" />
 
-<meta name="x-debug" content="${esc(JSON.stringify(debug))}" />
+<!-- DEBUG -->
+<meta name="x-debug" content='${esc(JSON.stringify(debug))}' />
 
 </head>
 <body>${esc(title)}</body>
