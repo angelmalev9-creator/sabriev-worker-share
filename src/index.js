@@ -1,5 +1,5 @@
 /**
- * Cloudflare Worker – Dynamic OG Meta (FINAL STABLE)
+ * Cloudflare Worker – Dynamic OG Meta (FINAL FIXED)
  */
 
 const DEFAULT_FALLBACK_OG_IMAGE = "https://sabriev.com/images/events-og.jpg";
@@ -12,7 +12,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // ✅ IMAGE PROXY
+    // IMAGE PROXY
     if (url.pathname.startsWith("/og-image/")) {
       const id = url.pathname.split("/og-image/")[1];
       return handleImageProxy(id, env);
@@ -33,14 +33,14 @@ export default {
 
     const event = await getEvent(eventId, env);
 
-    const imageProxy = `${SHARE_ORIGIN}/og-image/${eventId}`;
+    const ogImage = `${SHARE_ORIGIN}/og-image/${eventId}`;
 
     const og = {
       title: event?.title || "Събитие – Психолог Сердар Сабриев",
       description:
         event?.description ||
         "Предстоящи събития, семинари и групови занимания.",
-      image: imageProxy,
+      image: ogImage,
     };
 
     if (isBot || forceOg) {
@@ -50,8 +50,8 @@ export default {
         debug: {
           eventId,
           found: !!event,
-          rawTitle: event?.title || null,
-          rawImage: event?.image || null,
+          title: event?.title || null,
+          image: event?.image || null,
         },
       });
     }
@@ -62,7 +62,7 @@ export default {
 
 
 
-// 🔥 ULTRA SAFE EVENT FETCH
+// 🔥 SMART EVENT FETCH (NO GUESSING ANYMORE)
 async function getEvent(eventId, env) {
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return null;
 
@@ -83,45 +83,51 @@ async function getEvent(eventId, env) {
     const e = rows?.[0];
     if (!e) return null;
 
-    // 🔥 универсално четене
+    // 🔥 AUTO DETECT TITLE
+    const title =
+      e.title ||
+      e.name ||
+      e.event_title ||
+      Object.values(e).find(
+        v => typeof v === "string" && v.length > 10 && v.length < 120
+      );
+
+    // 🔥 AUTO DETECT IMAGE
     const image =
       e.image_url ||
       e.image ||
       e.cover ||
       e.thumbnail ||
-      e.banner ||
-      e.photo ||
-      null;
+      Object.values(e).find(
+        v =>
+          typeof v === "string" &&
+          v.startsWith("http") &&
+          (v.includes("supabase") || v.includes("storage"))
+      );
 
-    const title =
-      e.title ||
-      e.name ||
-      e.event_title ||
-      e.heading ||
-      null;
-
+    // 🔥 AUTO DETECT DESCRIPTION
     const description =
       e.description ||
       e.desc ||
-      e.content ||
-      e.text ||
-      null;
+      Object.values(e).find(
+        v => typeof v === "string" && v.length > 50
+      );
 
     return { title, description, image };
 
   } catch (err) {
-    console.error("Supabase fetch failed:", err);
+    console.error("Supabase fetch error:", err);
     return null;
   }
 }
 
 
 
-// 🔥 IMAGE PROXY (CRITICAL FOR FACEBOOK)
+// 🔥 IMAGE PROXY (FACEBOOK FIX)
 async function handleImageProxy(eventId, env) {
   const event = await getEvent(eventId, env);
 
-  let imageUrl = event?.image || DEFAULT_FALLBACK_OG_IMAGE;
+  const imageUrl = event?.image || DEFAULT_FALLBACK_OG_IMAGE;
 
   try {
     const res = await fetch(imageUrl);
@@ -130,7 +136,6 @@ async function handleImageProxy(eventId, env) {
 
     let type = res.headers.get("content-type");
 
-    // 🔥 FORCE VALID TYPE
     if (!type || !type.startsWith("image/")) {
       type = "image/jpeg";
     }
@@ -173,7 +178,6 @@ function buildHtml({ title, description, image, url, debug }) {
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:image" content="${esc(image)}" />
 
-<!-- DEBUG -->
 <meta name="x-debug" content="${esc(JSON.stringify(debug))}" />
 
 </head>
