@@ -1,4 +1,5 @@
-name = "sabriev-events-og"
+# wrangler.toml
+name = 'sabriev-worker-share'
 main = "src/index.js"
 compatibility_date = "2026-03-22"
 
