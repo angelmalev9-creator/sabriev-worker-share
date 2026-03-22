@@ -1,12 +1,12 @@
 /**
- * Cloudflare Worker – Dynamic OG Meta (FINAL REAL FIX)
+ * FINAL WORKER – REAL DEBUG VERSION
  */
 
 const DEFAULT_FALLBACK_OG_IMAGE = "https://sabriev.com/images/events-og.jpg";
 const SHARE_ORIGIN = "https://share.sabriev.com";
 
 const BOT_UA =
-  /facebookexternalhit|Facebot|meta-externalagent|meta-externalfetcher|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Slackbot|Discordbot|Googlebot|bingbot|Baiduspider|YandexBot|vkShare|Viber|Pinterest|Embedly|Iframely|Applebot|redditbot|Snapchat|SkypeUriPreview/i;
+/facebookexternalhit|Facebot|meta-externalagent|meta-externalfetcher|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Slackbot|Discordbot/i;
 
 export default {
   async fetch(request, env) {
@@ -18,7 +18,7 @@ export default {
       return handleImageProxy(id, env);
     }
 
-    const match = url.pathname.match(/^\/events\/([0-9a-f-]{36})\/?$/i);
+    const match = url.pathname.match(/^\/events\/([0-9a-f-]{36})$/i);
     if (!match) return new Response("Not found", { status: 404 });
 
     const eventId = match[1];
@@ -26,48 +26,34 @@ export default {
     const isBot = BOT_UA.test(ua);
     const forceOg = url.searchParams.get("og") === "1";
 
-    const siteOrigin = (env.SITE_ORIGIN || "https://sabriev.com").replace(/\/$/, "");
-
     const shareUrl = `${SHARE_ORIGIN}/events/${eventId}`;
-    const realUrl = `${siteOrigin}/events/${eventId}`;
 
     const event = await getEvent(eventId, env);
 
-    const ogImage = `${SHARE_ORIGIN}/og-image/${eventId}`;
-
     const og = {
-      title: event?.title || "Събитие – Психолог Сердар Сабриев",
-      description:
-        event?.description ||
-        "Предстоящи събития, семинари и групови занимания.",
-      image: ogImage,
+      title: event?.title || "FALLBACK TITLE",
+      description: event?.description || "FALLBACK DESC",
+      image: `${SHARE_ORIGIN}/og-image/${eventId}`,
     };
 
     if (isBot || forceOg) {
       return buildHtml({
         ...og,
         url: shareUrl,
-        debug: {
-          eventId,
-          found: !!event,
-          event: event || null,
-        },
+        debug: event || { error: "NO DATA" },
       });
     }
 
-    return Response.redirect(realUrl, 302);
+    return Response.redirect(`https://sabriev.com/events/${eventId}`, 302);
   },
 };
 
 
-
-// 🔥 REAL SUPABASE FETCH (NO GUESS, NO MAGIC)
+// 🔥 REAL FETCH + RAW DEBUG
 async function getEvent(eventId, env) {
-  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return null;
-
   try {
     const res = await fetch(
-      `${env.SUPABASE_URL}/rest/v1/events?select=*&id=eq.${eventId}`,
+      `${env.SUPABASE_URL}/rest/v1/events?id=eq.${eventId}&select=*`,
       {
         headers: {
           apikey: env.SUPABASE_ANON_KEY,
@@ -76,132 +62,58 @@ async function getEvent(eventId, env) {
       }
     );
 
-    const text = await res.text();
+    const data = await res.json();
+    const e = data?.[0];
 
-    // DEBUG
-    console.log("RAW SUPABASE:", text);
+    if (!e) return null;
 
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      return null;
-    }
-
-    if (!Array.isArray(data) || !data.length) return null;
-
-    const e = data[0];
-
-    // 🔥 ТУК СЕ ОПРЕДЕЛЯТ РЕАЛНИТЕ КОЛОНИ
+    // ⚠️ ТУК СМЕНИ С ТВОИТЕ КОЛОНИ СЛЕД DEBUG
     return {
-      title:
-        e.title ||
-        e.name ||
-        e.event_title ||
-        e.heading ||
-        null,
-
-      description:
-        e.description ||
-        e.desc ||
-        e.content ||
-        e.text ||
-        null,
-
-      image:
-        e.image_url ||
-        e.image ||
-        e.cover ||
-        e.thumbnail ||
-        e.banner ||
-        null,
+      title: e.title,
+      description: e.description,
+      image: e.image_url,
+      raw: e
     };
 
-  } catch (err) {
-    console.error("SUPABASE ERROR:", err);
+  } catch {
     return null;
   }
 }
 
 
-
-// 🔥 IMAGE PROXY (FACEBOOK FIX)
+// IMAGE PROXY
 async function handleImageProxy(eventId, env) {
   const event = await getEvent(eventId, env);
+  const img = event?.image || DEFAULT_FALLBACK_OG_IMAGE;
 
-  const imageUrl = event?.image || DEFAULT_FALLBACK_OG_IMAGE;
+  const res = await fetch(img);
 
-  try {
-    const res = await fetch(imageUrl);
-
-    if (!res.ok) throw new Error();
-
-    let type = res.headers.get("content-type");
-
-    if (!type || !type.startsWith("image/")) {
-      type = "image/jpeg";
-    }
-
-    return new Response(res.body, {
-      headers: {
-        "Content-Type": type,
-        "Cache-Control": "public, max-age=31536000",
-      },
-    });
-
-  } catch {
-    return fetch(DEFAULT_FALLBACK_OG_IMAGE);
-  }
+  return new Response(res.body, {
+    headers: {
+      "Content-Type": "image/jpeg",
+      "Cache-Control": "public, max-age=31536000",
+    },
+  });
 }
 
 
-
-// 🔥 OG HTML
+// HTML
 function buildHtml({ title, description, image, url, debug }) {
-  return new Response(
-`<!DOCTYPE html>
-<html lang="bg">
+  return new Response(`<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8" />
+<meta charset="utf-8"/>
 
-<title>${esc(title)}</title>
+<meta property="og:title" content="${title}" />
+<meta property="og:description" content="${description}" />
+<meta property="og:image" content="${image}" />
+<meta property="og:url" content="${url}" />
 
-<meta property="og:type" content="article" />
-<meta property="og:title" content="${esc(title)}" />
-<meta property="og:description" content="${esc(description)}" />
-<meta property="og:url" content="${esc(url)}" />
-
-<meta property="og:image" content="${esc(image)}" />
-<meta property="og:image:secure_url" content="${esc(image)}" />
-<meta property="og:image:type" content="image/jpeg" />
-<meta property="og:image:width" content="1200" />
-<meta property="og:image:height" content="630" />
-
-<meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:image" content="${esc(image)}" />
-
-<!-- DEBUG -->
-<meta name="x-debug" content='${esc(JSON.stringify(debug))}' />
+<meta name="x-debug" content='${JSON.stringify(debug)}' />
 
 </head>
-<body>${esc(title)}</body>
-</html>`,
-    {
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "public, max-age=300",
-      },
-    }
-  );
-}
-
-
-
-// UTILS
-function esc(v) {
-  return String(v || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+<body>${title}</body>
+</html>`, {
+    headers: { "Content-Type": "text/html" },
+  });
 }
