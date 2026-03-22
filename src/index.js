@@ -14,8 +14,10 @@
  *   Add ?og=1 to force OG response in a normal browser
  */
 
+// Expanded crawler detection.
+// Important: Meta/Facebook often uses meta-externalagent / meta-externalfetcher now.
 const BOT_UA =
-  /facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Slackbot|Discordbot|Googlebot|bingbot|Baiduspider|YandexBot|vkShare|Viber|Pinterest|Embedly|Iframely|Applebot|redditbot|Snapchat/i;
+  /facebookexternalhit|Facebot|meta-externalagent|meta-externalfetcher|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Slackbot|Discordbot|Googlebot|bingbot|Baiduspider|YandexBot|vkShare|Viber|Pinterest|Embedly|Iframely|Applebot|redditbot|Snapchat|SkypeUriPreview/i;
 
 const FALLBACK_OG_IMAGE = "https://sabriev.com/images/events-og.jpg";
 
@@ -34,8 +36,8 @@ export default {
     const forceOg = url.searchParams.get("og") === "1";
     const isBot = BOT_UA.test(ua);
 
-    // For normal visitors, let the origin site handle the page.
-    // For bots OR debug mode (?og=1), return OG HTML.
+    // Normal visitors -> origin site
+    // Bots OR ?og=1 -> worker OG HTML
     if (!forceOg && !isBot) {
       return fetch(request);
     }
@@ -55,12 +57,12 @@ export default {
       }
     }
 
-    // 2) Fallback local map
+    // 2) Optional local fallback map
     if (!event) {
       event = LOCAL_EVENT_MAP[eventId] || null;
     }
 
-    // 3) Generic fallback OG if event missing
+    // 3) Generic fallback OG
     if (!event) {
       return buildOgResponse({
         title: "Събитие – Психолог Сердар Сабриев",
@@ -69,6 +71,10 @@ export default {
         imageUrl: fallbackImage,
         eventUrl,
         isDebugView: forceOg,
+        debug: {
+          ua,
+          reason: "event_not_found",
+        },
       });
     }
 
@@ -82,13 +88,19 @@ export default {
       imageUrl,
       eventUrl,
       isDebugView: forceOg,
+      debug: {
+        ua,
+        reason: "event_found",
+        eventId,
+        imageUrl,
+      },
     });
   },
 };
 
 async function fetchEventFromSupabase(eventId, env) {
   const params = new URLSearchParams({
-    select: "title,description,image_url",
+    select: "id,title,description,image_url,is_active",
     id: `eq.${eventId}`,
     is_active: "eq.true",
   });
@@ -118,11 +130,25 @@ async function fetchEventFromSupabase(eventId, env) {
   return Array.isArray(rows) && rows.length ? rows[0] : null;
 }
 
-function buildOgResponse({ title, description, imageUrl, eventUrl, isDebugView = false }) {
+function buildOgResponse({
+  title,
+  description,
+  imageUrl,
+  eventUrl,
+  isDebugView = false,
+  debug = {},
+}) {
   const safeTitle = esc(title);
   const safeDescription = esc(description);
   const safeImageUrl = esc(imageUrl);
   const safeEventUrl = esc(eventUrl);
+
+  const debugComment = `<!-- ${esc(
+    JSON.stringify({
+      worker: "sabriev-events-og",
+      ...debug,
+    })
+  )} -->`;
 
   const html = `<!DOCTYPE html>
 <html lang="bg">
@@ -152,6 +178,7 @@ function buildOgResponse({ title, description, imageUrl, eventUrl, isDebugView =
   <meta name="twitter:image" content="${safeImageUrl}" />
 
   ${isDebugView ? "" : `<meta http-equiv="refresh" content="0;url=${safeEventUrl}" />`}
+  ${debugComment}
 </head>
 <body>
   ${isDebugView ? "" : `<script>window.location.replace(${JSON.stringify(eventUrl)});</script>`}
