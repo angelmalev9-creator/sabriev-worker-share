@@ -13,7 +13,6 @@
 const DEFAULT_FALLBACK_OG_IMAGE = "https://sabriev.com/images/events-og.jpg";
 const SHARE_ORIGIN = "https://share.sabriev.com";
 
-// Important: include modern Meta/Facebook crawlers
 const BOT_UA =
   /facebookexternalhit|Facebot|meta-externalagent|meta-externalfetcher|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Slackbot|Discordbot|Googlebot|bingbot|Baiduspider|YandexBot|vkShare|Viber|Pinterest|Embedly|Iframely|Applebot|redditbot|Snapchat|SkypeUriPreview/i;
 
@@ -64,15 +63,14 @@ export default {
           imageUrl: fallbackImage,
         };
 
-    // Bots and ?og=1 get pure OG page with NO redirect
+    // За ботове и debug mode: чист OG HTML, без redirect
     if (isBot || forceOg) {
       return buildOgResponse({
         title: ogData.title,
         description: ogData.description,
         imageUrl: ogData.imageUrl,
+        ogUrl: shareEventUrl,
         canonicalUrl: shareEventUrl,
-        redirectUrl: realEventUrl,
-        shouldRedirect: false,
         debug: {
           mode: forceOg ? "debug" : "bot",
           eventId,
@@ -82,21 +80,8 @@ export default {
       });
     }
 
-    // Real users get OG page + redirect to actual site
-    return buildOgResponse({
-      title: ogData.title,
-      description: ogData.description,
-      imageUrl: ogData.imageUrl,
-      canonicalUrl: shareEventUrl,
-      redirectUrl: realEventUrl,
-      shouldRedirect: true,
-      debug: {
-        mode: "user",
-        eventId,
-        found: !!event,
-        ua,
-      },
-    });
+    // За реални потребители: директен redirect към истинската страница
+    return Response.redirect(realEventUrl, 302);
   },
 };
 
@@ -136,16 +121,15 @@ function buildOgResponse({
   title,
   description,
   imageUrl,
+  ogUrl,
   canonicalUrl,
-  redirectUrl,
-  shouldRedirect,
   debug = {},
 }) {
   const safeTitle = esc(title);
   const safeDescription = esc(description);
   const safeImageUrl = esc(imageUrl);
+  const safeOgUrl = esc(ogUrl);
   const safeCanonicalUrl = esc(canonicalUrl);
-  const safeRedirectUrl = esc(redirectUrl);
 
   const debugComment = `<!-- ${esc(
     JSON.stringify({
@@ -153,14 +137,6 @@ function buildOgResponse({
       ...debug,
     })
   )} -->`;
-
-  const redirectMeta = shouldRedirect
-    ? `<meta http-equiv="refresh" content="0;url=${safeRedirectUrl}" />`
-    : "";
-
-  const redirectScript = shouldRedirect
-    ? `<script>window.location.replace(${JSON.stringify(redirectUrl)});</script>`
-    : "";
 
   const html = `<!DOCTYPE html>
 <html lang="bg">
@@ -175,7 +151,7 @@ function buildOgResponse({
   <meta property="og:type" content="article" />
   <meta property="og:title" content="${safeTitle}" />
   <meta property="og:description" content="${safeDescription}" />
-  <meta property="og:url" content="${safeCanonicalUrl}" />
+  <meta property="og:url" content="${safeOgUrl}" />
   <meta property="og:image" content="${safeImageUrl}" />
   <meta property="og:image:secure_url" content="${safeImageUrl}" />
   <meta property="og:image:width" content="1200" />
@@ -189,12 +165,10 @@ function buildOgResponse({
   <meta name="twitter:description" content="${safeDescription}" />
   <meta name="twitter:image" content="${safeImageUrl}" />
 
-  ${redirectMeta}
   ${debugComment}
 </head>
 <body>
-  ${redirectScript}
-  <p>${shouldRedirect ? "Пренасочване към" : "Преглед на събитие"} <a href="${safeRedirectUrl}">${safeTitle}</a></p>
+  <p>${safeTitle}</p>
 </body>
 </html>`;
 
