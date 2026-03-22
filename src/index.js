@@ -7,8 +7,8 @@
  *   SITE_ORIGIN
  *   FALLBACK_IMAGE
  *
- * Route trigger:
- *   sabriev.com/events/*
+ * Custom domain:
+ *   share.sabriev.com
  *
  * Debug:
  *   Add ?og=1 to force OG response in a normal browser
@@ -17,7 +17,7 @@
 const BOT_UA =
   /facebookexternalhit|Facebot|meta-externalagent|meta-externalfetcher|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Slackbot|Discordbot|Googlebot|bingbot|Baiduspider|YandexBot|vkShare|Viber|Pinterest|Embedly|Iframely|Applebot|redditbot|Snapchat|SkypeUriPreview/i;
 
-const FALLBACK_OG_IMAGE = "https://sabriev.com/images/events-og.jpg";
+const DEFAULT_FALLBACK_OG_IMAGE = "https://sabriev.com/images/events-og.jpg";
 
 export default {
   async fetch(request, env) {
@@ -25,7 +25,7 @@ export default {
     const match = url.pathname.match(/^\/events\/([0-9a-f-]{36})\/?$/i);
 
     if (!match) {
-      return fetch(request);
+      return new Response("Not found", { status: 404 });
     }
 
     const eventId = match[1];
@@ -33,16 +33,20 @@ export default {
     const forceOg = url.searchParams.get("og") === "1";
     const isBot = BOT_UA.test(ua);
 
-    if (!forceOg && !isBot) {
-      return fetch(request);
-    }
-
     const siteOrigin = (env.SITE_ORIGIN || "https://sabriev.com").replace(/\/$/, "");
-    const fallbackImage = env.FALLBACK_IMAGE || FALLBACK_OG_IMAGE;
-    const eventUrl = `${siteOrigin}/events/${eventId}`;
+    const fallbackImage = env.FALLBACK_IMAGE || DEFAULT_FALLBACK_OG_IMAGE;
+
+    // Реалната страница, към която да пренасочим човека след click
+    const realEventUrl = `${siteOrigin}/events/${eventId}`;
+
+    // Ако не е бот и не е debug mode, просто redirect към реалната страница
+    if (!forceOg && !isBot) {
+      return Response.redirect(realEventUrl, 302);
+    }
 
     let event = null;
 
+    // 1) Опит със Supabase
     if (env.SUPABASE_URL && env.SUPABASE_ANON_KEY) {
       try {
         event = await fetchEventFromSupabase(eventId, env);
@@ -51,39 +55,44 @@ export default {
       }
     }
 
+    // 2) Fallback към локален map
     if (!event) {
       event = LOCAL_EVENT_MAP[eventId] || null;
     }
 
+    // 3) Generic fallback, ако няма данни
     if (!event) {
       return buildOgResponse({
         title: "Събитие – Психолог Сердар Сабриев",
         description:
           "Предстоящи събития, семинари и групови занимания с психолог Сердар Сабриев.",
         imageUrl: fallbackImage,
-        eventUrl,
+        canonicalUrl: realEventUrl,
+        redirectUrl: realEventUrl,
         isDebugView: forceOg,
         debug: {
-          ua,
           reason: "event_not_found",
+          eventId,
+          ua,
         },
       });
     }
 
     const title = cleanText(event.title || "Събитие");
-    const description = truncate(event.description || "", 155);
+    const description = truncate(event.description || "", 180);
     const imageUrl = cleanText(event.image_url || event.imageUrl || fallbackImage);
 
     return buildOgResponse({
-      title: `${title} – Психолог Сердар Сабриев`,
+      title,
       description,
       imageUrl,
-      eventUrl,
+      canonicalUrl: realEventUrl,
+      redirectUrl: realEventUrl,
       isDebugView: forceOg,
       debug: {
-        ua,
         reason: "event_found",
         eventId,
+        ua,
         imageUrl,
       },
     });
@@ -126,14 +135,16 @@ function buildOgResponse({
   title,
   description,
   imageUrl,
-  eventUrl,
+  canonicalUrl,
+  redirectUrl,
   isDebugView = false,
   debug = {},
 }) {
   const safeTitle = esc(title);
   const safeDescription = esc(description);
   const safeImageUrl = esc(imageUrl);
-  const safeEventUrl = esc(eventUrl);
+  const safeCanonicalUrl = esc(canonicalUrl);
+  const safeRedirectUrl = esc(redirectUrl);
 
   const debugComment = `<!-- ${esc(
     JSON.stringify({
@@ -150,12 +161,12 @@ function buildOgResponse({
 
   <title>${safeTitle}</title>
   <meta name="description" content="${safeDescription}" />
-  <link rel="canonical" href="${safeEventUrl}" />
+  <link rel="canonical" href="${safeCanonicalUrl}" />
 
   <meta property="og:type" content="article" />
   <meta property="og:title" content="${safeTitle}" />
   <meta property="og:description" content="${safeDescription}" />
-  <meta property="og:url" content="${safeEventUrl}" />
+  <meta property="og:url" content="${safeCanonicalUrl}" />
   <meta property="og:image" content="${safeImageUrl}" />
   <meta property="og:image:secure_url" content="${safeImageUrl}" />
   <meta property="og:image:width" content="1200" />
@@ -169,12 +180,12 @@ function buildOgResponse({
   <meta name="twitter:description" content="${safeDescription}" />
   <meta name="twitter:image" content="${safeImageUrl}" />
 
-  ${isDebugView ? "" : `<meta http-equiv="refresh" content="0;url=${safeEventUrl}" />`}
+  ${isDebugView ? "" : `<meta http-equiv="refresh" content="0;url=${safeRedirectUrl}" />`}
   ${debugComment}
 </head>
 <body>
-  ${isDebugView ? "" : `<script>window.location.replace(${JSON.stringify(eventUrl)});</script>`}
-  <p>${isDebugView ? "OG debug mode" : "Пренасочване към"} <a href="${safeEventUrl}">${safeTitle}</a></p>
+  ${isDebugView ? "" : `<script>window.location.replace(${JSON.stringify(redirectUrl)});</script>`}
+  <p>${isDebugView ? "OG debug mode" : "Пренасочване към"} <a href="${safeRedirectUrl}">${safeTitle}</a></p>
 </body>
 </html>`;
 
@@ -217,9 +228,53 @@ async function safeReadText(res) {
 }
 
 const LOCAL_EVENT_MAP = {
-  // "uuid-here": {
-  //   title: "Примерно събитие",
-  //   description: "Кратко описание на събитието.",
-  //   imageUrl: "https://sabriev.com/images/example.jpg",
-  // },
+  "03b68d3e-1275-4e50-acc4-af18c2218167": {
+    title: "Приказките, които ни разболяват",
+    description:
+      'Всеки в живота си чува, вижда и усеща различни "приказки". Тези приказки може да са поучителни, да са позитивни или да носят товар. Независимо какви са приказките в твоя живот не бива да допускаш те да доведат до душевно разболяване.',
+    image_url:
+      "https://ymeanxgocsvaqeboljhh.supabase.co/storage/v1/object/public/event-images/events/1773921509376-3y7rprvwgmd.png",
+  },
+  "c3977841-106c-4f53-a44a-0dad99d64d23": {
+    title: "Живот по сценарий: приказките, които определят изборите ни",
+    description:
+      "Ако искате да се потопите в света на приказките и да разберете как те влияят на вашите житейски решения, то това е вашето събитие!",
+    image_url:
+      "https://ymeanxgocsvaqeboljhh.supabase.co/storage/v1/object/public/event-images/event-fairy-tales.jpg",
+  },
+  "b0e5dda9-d6f2-4996-ac0e-1c708fb39d5a": {
+    title: "Историите, които възпитават",
+    description:
+      "По време на събитието ще се пренесете в едно времево пространство на магии, наричания и добрословене. Ще разгледаме как историите и посланията могат да дадат положителен тласък на личността в нейното съществуване.",
+    image_url:
+      "https://ymeanxgocsvaqeboljhh.supabase.co/storage/v1/object/public/event-images/events/1773998499966-1y0tcfcz07xh.jpg",
+  },
+  "af6f909f-1612-4818-9102-52f6ae2af297": {
+    title: "Професионалното прегаряне или как да се погрижа за себе си?",
+    description:
+      "Това обучение е създадено специално за учители, директори, заместник-директори и психолози, които ежедневно работят в интензивна среда и често поставят себе си на последно място.",
+    image_url:
+      "https://ymeanxgocsvaqeboljhh.supabase.co/storage/v1/object/public/event-images/events/1773997349935-zp49t1rsrgr.jpg",
+  },
+  "734ace72-713a-40f5-9449-bee997992ab5": {
+    title: "Приказките, които ни разболяват",
+    description:
+      'Всеки в живота си чува, вижда и усеща различни "приказки". Тези приказки може да са поучителни, да са позитивни или да носят товар.',
+    image_url:
+      "https://ymeanxgocsvaqeboljhh.supabase.co/storage/v1/object/public/event-images/events/1773921338334-ny6fref6xj.png",
+  },
+  "e3f554a6-b560-4ddd-a608-1050ba46e508": {
+    title: "Здраве и патология в партньорските отношения",
+    description:
+      "Имаме удоволствието да Ви поканим на едно събитие, посветено на най-важната, но често и най-трудна сфера в живота ни - партньорските отношения.",
+    image_url:
+      "https://ymeanxgocsvaqeboljhh.supabase.co/storage/v1/object/public/event-images/events/1773998500018-5fzhwqpu6yq.webp",
+  },
+  "c2897a2f-c29a-4b41-a2fe-f0e6ecce9da9": {
+    title: "Паник атаките и как да се справя с тях",
+    description:
+      "Паник атаките могат да превърнат ежедневието в предизвикателство, но с правилните знания и техники справянето е възможно.",
+    image_url:
+      "https://ymeanxgocsvaqeboljhh.supabase.co/storage/v1/object/public/event-images/events/1773998500126-9jr6ruoepx7.webp",
+  },
 };
