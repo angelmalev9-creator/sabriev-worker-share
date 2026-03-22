@@ -1,3 +1,8 @@
 name = "sabriev-events-og"
-main = "cloudflare-worker-og.js"
+main = "src/index.js"
 compatibility_date = "2026-03-22"
+
+[vars]
+SITE_ORIGIN = "https://sabriev.com"
+SUPABASE_URL = "https://ymeanxgocsvaqeboljhh.supabase.co"
+FALLBACK_IMAGE = "https://sabriev.com/images/events-og.jpg"
